@@ -50,8 +50,14 @@ function App() {
       return;
     }
 
+    const activeTheme = useThemeStore.getState().themes.find(t => t.id === activeThemeId);
+    if (!activeTheme) return;
+
+    // Use name-based key to align PC and mobile devices (which might have differing local UUIDs)
+    const channelKey = activeTheme.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
+
     const tabId = uuidv4();
-    const channel = new BroadcastChannel('theme_presence_' + activeThemeId);
+    const channel = new BroadcastChannel('theme_presence_' + channelKey);
     
     // Request initial state synchronization from other tabs locally
     const initReq = { type: 'SYNC_REQUEST', tabId };
@@ -88,7 +94,7 @@ function App() {
       if (isClosed) return;
 
       try {
-        const roomName = `punt_designer_theme_${activeThemeId}`;
+        const roomName = `punt_designer_theme_${channelKey}`;
         ws = new WebSocket(`wss://socketsbay.com/wss/v2/1/${roomName}/`);
 
         ws.onopen = () => {
