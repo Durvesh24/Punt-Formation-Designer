@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --color-punt-red: #ef4444;
+  --color-punt-yellow: #eab308;
+  --color-punt-green: #22c55e;
+  --color-punt-off: #94a3b8;
+}
+
+@layer base {
+  html, body, #root {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
+    overflow: hidden;
+    position: fixed;
+    background-color: #020617 !important;
+  }
+  
+  /* Adding a nice subtle glow for active elements */
+  .punt-glow-red { filter: drop-shadow(0 0 8px rgba(239, 68, 68, 0.7)); }
+  .punt-glow-yellow { filter: drop-shadow(0 0 8px rgba(234, 179, 8, 0.7)); }
+  .punt-glow-green { filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.7)); }
+  .punt-glow-off { filter: drop-shadow(0 0 4px rgba(148, 163, 184, 0.3)); }
+}
