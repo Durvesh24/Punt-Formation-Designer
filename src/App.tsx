@@ -44,91 +44,66 @@ function App() {
 
   const [activeUserCount, setActiveUserCount] = useState(1);
 
-  // ── Real-time tab/window & cross-device presence & sync using dual channels ──
+  // ── Global Real-time Synchronization Engine (itty-sockets) ──
+  const pageRef = useRef(page);
   useEffect(() => {
-    if (!activeThemeId || page !== 'editor') {
-      setActiveUserCount(1);
-      return;
-    }
+    pageRef.current = page;
+  }, [page]);
 
-    const activeTheme = useThemeStore.getState().themes.find(t => t.id === activeThemeId);
-    if (!activeTheme) return;
-
-    // Use name-based key to align PC and mobile devices (which might have differing local UUIDs)
-    const channelKey = activeTheme.name.toLowerCase().replace(/[^a-z0-9]/g, '_');
-
+  useEffect(() => {
     const tabId = uuidv4();
-    const channel = new BroadcastChannel('theme_presence_' + channelKey);
-    
-    // Request initial state synchronization from other tabs locally
-    const initReq = { type: 'SYNC_REQUEST', tabId };
-    try { channel.postMessage(initReq); } catch {}
-
-    // Track peers with a Map containing the last seen timestamp of each tabId
     const lastSeenMap = new Map<string, number>();
-
-    let lastReceivedPunts = '';
-    let lastReceivedScenes = '';
-    let lastReceivedFormations = '';
-    
-    let ittySock: ReturnType<typeof ittySockConnect> | null = null;
+    let lastReceivedThemes = '';
     let isClosed = false;
+    let globalSock: ReturnType<typeof ittySockConnect> | null = null;
 
     const announcePresence = () => {
-      const msg = { type: 'HEARTBEAT', tabId };
-      // 1. Broadcast locally
-      try {
-        channel.postMessage(msg);
-      } catch { /* */ }
-
-      // 2. Broadcast globally over itty-sockets
-      if (ittySock) {
-        try {
-          ittySock.send(msg);
-        } catch { /* */ }
+      const activeThemeId = useThemeStore.getState().activeThemeId;
+      const msg = { type: 'GLOBAL_HEARTBEAT', tabId, activeThemeId };
+      if (globalSock) {
+        try { globalSock.send(msg); } catch {}
       }
     };
 
-    // Connect to itty-sockets relay for cross-device synchronization
-    const connectItty = () => {
+    const connectGlobalSync = () => {
       if (isClosed) return;
       useEditorStore.setState({ syncStatus: 'connecting' });
 
       try {
-        const roomName = `punt-designer-${channelKey}`;
-        console.log('[SYNC] Connecting to itty-sockets channel:', roomName);
-        
-        ittySock = ittySockConnect(roomName);
-        
-        // itty-sockets fires 'open' when connected
-        ittySock.on('open', () => {
-          console.log('[SYNC] ✅ Connected to itty-sockets channel:', roomName);
+        const channelName = 'punt-designer-global-sync';
+        console.log('[GLOBAL SYNC] Connecting to global channel:', channelName);
+
+        globalSock = ittySockConnect(channelName);
+
+        globalSock.on('open', () => {
+          console.log('[GLOBAL SYNC] ✅ Connected to global channel:', channelName);
           useEditorStore.setState({ syncStatus: 'connected' });
           announcePresence();
-          // Immediately request full state synchronization from any active peer
-          ittySock!.send({ type: 'SYNC_REQUEST', tabId });
+          // Request complete themes sync from any online clients immediately on connect
+          try {
+            globalSock!.send({ type: 'GLOBAL_THEMES_REQUEST', tabId });
+          } catch {}
         });
 
-        // itty-sockets fires 'message' with { message } containing the parsed payload
-        ittySock.on('message', ({ message }: { message: any }) => {
+        globalSock.on('message', ({ message }: { message: any }) => {
           try {
             handleIncomingMessage(message);
-          } catch {
-            // Safe ignore corrupt messages
+          } catch (e) {
+            console.error('[GLOBAL SYNC] Error processing message:', e);
           }
         });
 
-        ittySock.on('close', () => {
-          console.log('[SYNC] itty-sockets channel closed');
+        globalSock.on('close', () => {
+          console.log('[GLOBAL SYNC] Connection closed');
           useEditorStore.setState({ syncStatus: 'disconnected' });
         });
 
-        ittySock.on('error', () => {
-          console.warn('[SYNC] itty-sockets connection error');
+        globalSock.on('error', () => {
+          console.warn('[GLOBAL SYNC] Connection error');
           useEditorStore.setState({ syncStatus: 'disconnected' });
         });
       } catch (err) {
-        console.error('[SYNC] Failed to initialize itty-sockets:', err);
+        console.error('[GLOBAL SYNC] Failed to initialize global sync:', err);
         useEditorStore.setState({ syncStatus: 'disconnected' });
       }
     };
@@ -136,139 +111,83 @@ function App() {
     const handleIncomingMessage = (data: any) => {
       if (!data || data.tabId === tabId) return;
 
-      if (data.type === 'HEARTBEAT') {
-        // Record timestamp for the peer (either local or remote)
-        lastSeenMap.set(data.tabId, Date.now());
-        setActiveUserCount(1 + lastSeenMap.size);
-      }
+      const currentActiveThemeId = useThemeStore.getState().activeThemeId;
 
-      if (data.type === 'PUNTS_UPDATE') {
-        const puntsStr = JSON.stringify(data.punts);
-        if (puntsStr !== lastReceivedPunts && puntsStr !== JSON.stringify(useFormationStore.getState().punts)) {
-          lastReceivedPunts = puntsStr;
-          useFormationStore.setState({ punts: data.punts });
-
-          // Sync to active theme in useThemeStore so MobileThemeViewer updates instantly!
-          const { activeThemeId, themes } = useThemeStore.getState();
-          if (activeThemeId) {
-            const updated = themes.map(t => t.id === activeThemeId ? { ...t, currentPunts: data.punts } : t);
-            useThemeStore.setState({ themes: updated });
-            try {
-              localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
-            } catch { /* */ }
+      if (data.type === 'GLOBAL_HEARTBEAT') {
+        // Only count peers that are currently editing/viewing the same theme
+        if (data.activeThemeId && data.activeThemeId === currentActiveThemeId) {
+          lastSeenMap.set(data.tabId, Date.now());
+          setActiveUserCount(1 + lastSeenMap.size);
+        } else {
+          if (lastSeenMap.has(data.tabId)) {
+            lastSeenMap.delete(data.tabId);
+            setActiveUserCount(1 + lastSeenMap.size);
           }
         }
       }
 
-      if (data.type === 'SCENES_UPDATE') {
-        const scenesStr = JSON.stringify(data.scenes);
-        if (scenesStr !== lastReceivedScenes && scenesStr !== JSON.stringify(useTimelineStore.getState().scenes)) {
-          lastReceivedScenes = scenesStr;
-          useTimelineStore.setState({ 
-            scenes: data.scenes, 
-            activeSceneId: data.activeSceneId 
+      if (data.type === 'GLOBAL_THEMES_REQUEST') {
+        // Broadcast our current list of themes to let the new client sync instantly!
+        try {
+          globalSock!.send({
+            type: 'GLOBAL_THEMES_UPDATE',
+            themes: useThemeStore.getState().themes,
+            tabId
           });
-
-          // Sync to active theme in useThemeStore so MobileThemeViewer updates instantly!
-          const { activeThemeId, themes } = useThemeStore.getState();
-          if (activeThemeId) {
-            const updated = themes.map(t => t.id === activeThemeId ? { ...t, shapes: data.scenes } : t);
-            useThemeStore.setState({ themes: updated });
-            try {
-              localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
-            } catch { /* */ }
-          }
-        }
+        } catch {}
       }
 
-      if (data.type === 'FORMATIONS_UPDATE') {
-        const formStr = JSON.stringify(data.formations);
-        if (formStr !== lastReceivedFormations && formStr !== JSON.stringify(useFormationStore.getState().savedFormations)) {
-          lastReceivedFormations = formStr;
-          useFormationStore.setState({ savedFormations: data.formations });
+      if (data.type === 'GLOBAL_THEMES_UPDATE') {
+        const themesStr = JSON.stringify(data.themes);
+        if (themesStr !== lastReceivedThemes && themesStr !== JSON.stringify(useThemeStore.getState().themes)) {
+          lastReceivedThemes = themesStr;
 
-          // Sync to active theme in useThemeStore so MobileThemeViewer updates instantly!
-          const { activeThemeId, themes } = useThemeStore.getState();
-          if (activeThemeId) {
-            const updated = themes.map(t => t.id === activeThemeId ? { ...t, formations: data.formations } : t);
-            useThemeStore.setState({ themes: updated });
-            try {
-              localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
-            } catch { /* */ }
-          }
-        }
-      }
-
-      if (data.type === 'SYNC_REQUEST') {
-        // Respond with our current full state to let the connecting client catch up!
-        const statePayload = {
-          type: 'SYNC_RESPONSE',
-          punts: useFormationStore.getState().punts,
-          scenes: useTimelineStore.getState().scenes,
-          formations: useFormationStore.getState().savedFormations,
-          tabId
-        };
-        try { channel.postMessage(statePayload); } catch {}
-        if (ittySock) {
-          try { ittySock.send(statePayload); } catch {}
-        }
-      }
-
-      if (data.type === 'SYNC_RESPONSE') {
-        // 1. Sync Punts
-        const puntsStr = JSON.stringify(data.punts);
-        if (puntsStr !== lastReceivedPunts && puntsStr !== JSON.stringify(useFormationStore.getState().punts)) {
-          lastReceivedPunts = puntsStr;
-          useFormationStore.setState({ punts: data.punts });
-        }
-
-        // 2. Sync Scenes
-        const scenesStr = JSON.stringify(data.scenes);
-        if (scenesStr !== lastReceivedScenes && scenesStr !== JSON.stringify(useTimelineStore.getState().scenes)) {
-          lastReceivedScenes = scenesStr;
-          useTimelineStore.setState({ 
-            scenes: data.scenes, 
-            activeSceneId: data.activeSceneId 
-          });
-        }
-
-        // 3. Sync Formations Library
-        const formStr = JSON.stringify(data.formations);
-        if (formStr !== lastReceivedFormations && formStr !== JSON.stringify(useFormationStore.getState().savedFormations)) {
-          lastReceivedFormations = formStr;
-          useFormationStore.setState({ savedFormations: data.formations });
-        }
-
-        // Always sync all elements to active theme in useThemeStore on a sync response to guarantee complete consistency!
-        const { activeThemeId, themes } = useThemeStore.getState();
-        if (activeThemeId) {
-          const updated = themes.map(t => 
-            t.id === activeThemeId 
-              ? { ...t, currentPunts: data.punts, shapes: data.scenes, formations: data.formations } 
-              : t
-          );
-          useThemeStore.setState({ themes: updated });
+          // 1. Sync theme store
+          useThemeStore.setState({ themes: data.themes });
           try {
-            localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
-          } catch { /* */ }
+            localStorage.setItem('punt_designer_themes', JSON.stringify(data.themes));
+          } catch {}
+
+          // 2. If editing/viewing the active theme, sync active workspace stores!
+          const activeThemeId = useThemeStore.getState().activeThemeId;
+          const page = pageRef.current;
+          
+          if (activeThemeId && page === 'editor') {
+            const currentActiveTheme = data.themes.find((t: any) => t.id === activeThemeId);
+            if (currentActiveTheme) {
+              // Sync Punts
+              const puntsStr = JSON.stringify(currentActiveTheme.currentPunts);
+              if (puntsStr !== JSON.stringify(useFormationStore.getState().punts)) {
+                useFormationStore.setState({ punts: currentActiveTheme.currentPunts });
+              }
+
+              // Sync timeline scenes
+              const scenesStr = JSON.stringify(currentActiveTheme.shapes);
+              if (scenesStr !== JSON.stringify(useTimelineStore.getState().scenes)) {
+                useTimelineStore.setState({
+                  scenes: currentActiveTheme.shapes,
+                  activeSceneId: currentActiveTheme.shapes[0]?.id ?? null
+                });
+              }
+
+              // Sync Formations presets library
+              const formationsStr = JSON.stringify(currentActiveTheme.formations ?? []);
+              if (formationsStr !== JSON.stringify(useFormationStore.getState().savedFormations)) {
+                useFormationStore.setState({ savedFormations: currentActiveTheme.formations ?? [] });
+              }
+            }
+          }
         }
       }
     };
 
-    const handleBroadcastMessage = (e: MessageEvent) => {
-      handleIncomingMessage(e.data);
-    };
+    connectGlobalSync();
 
-    channel.addEventListener('message', handleBroadcastMessage);
-    
-    // Connect itty-sockets
-    connectItty();
-
-    // Broadcast heartbeat every 2 seconds
+    // 2-second heartbeat
     const heartbeatInterval = setInterval(announcePresence, 2000);
     announcePresence();
 
-    // 1-second interval to prune inactive tabs (timeouts longer than 5 seconds)
+    // 1-second presence pruning
     const peerCleanup = setInterval(() => {
       const now = Date.now();
       let changed = false;
@@ -283,53 +202,17 @@ function App() {
       }
     }, 1000);
 
-    const unsubscribePunts = useFormationStore.subscribe((state) => {
-      const puntsStr = JSON.stringify(state.punts);
-      if (puntsStr !== lastReceivedPunts) {
-        const payload = { type: 'PUNTS_UPDATE', punts: state.punts, tabId };
+    // Subscribe to theme list changes (creation, rename, delete, auto-saves)
+    const unsubscribeThemes = useThemeStore.subscribe((state) => {
+      const themesStr = JSON.stringify(state.themes);
+      if (themesStr !== lastReceivedThemes) {
         try {
-          channel.postMessage(payload);
-        } catch { /* */ }
-        if (ittySock) {
-          try {
-            ittySock.send(payload);
-          } catch { /* */ }
-        }
-      }
-    });
-
-    const unsubscribeTimeline = useTimelineStore.subscribe((state) => {
-      const scenesStr = JSON.stringify(state.scenes);
-      if (scenesStr !== lastReceivedScenes) {
-        const payload = { 
-          type: 'SCENES_UPDATE', 
-          scenes: state.scenes, 
-          activeSceneId: state.activeSceneId, 
-          tabId 
-        };
-        try {
-          channel.postMessage(payload);
-        } catch { /* */ }
-        if (ittySock) {
-          try {
-            ittySock.send(payload);
-          } catch { /* */ }
-        }
-      }
-    });
-
-    const unsubscribeFormations = useFormationStore.subscribe((state) => {
-      const formStr = JSON.stringify(state.savedFormations);
-      if (formStr !== lastReceivedFormations) {
-        const payload = { type: 'FORMATIONS_UPDATE', formations: state.savedFormations, tabId };
-        try {
-          channel.postMessage(payload);
-        } catch { /* */ }
-        if (ittySock) {
-          try {
-            ittySock.send(payload);
-          } catch { /* */ }
-        }
+          globalSock!.send({
+            type: 'GLOBAL_THEMES_UPDATE',
+            themes: state.themes,
+            tabId
+          });
+        } catch {}
       }
     });
 
@@ -338,20 +221,12 @@ function App() {
       useEditorStore.setState({ syncStatus: 'disconnected' });
       clearInterval(heartbeatInterval);
       clearInterval(peerCleanup);
-      channel.removeEventListener('message', handleBroadcastMessage);
-      unsubscribePunts();
-      unsubscribeTimeline();
-      unsubscribeFormations();
-      try {
-        channel.close();
-      } catch { /* */ }
-      if (ittySock) {
-        try {
-          ittySock.close();
-        } catch { /* */ }
+      unsubscribeThemes();
+      if (globalSock) {
+        try { globalSock.close(); } catch {}
       }
     };
-  }, [activeThemeId, page]);
+  }, []);
 
 
   const isDark = theme === 'dark';
