@@ -53,6 +53,10 @@ function App() {
     const tabId = uuidv4();
     const channel = new BroadcastChannel('theme_presence_' + activeThemeId);
     
+    // Request initial state synchronization from other tabs locally
+    const initReq = { type: 'SYNC_REQUEST', tabId };
+    try { channel.postMessage(initReq); } catch {}
+
     // Track peers with a Map containing the last seen timestamp of each tabId
     const lastSeenMap = new Map<string, number>();
 
@@ -90,6 +94,9 @@ function App() {
         ws.onopen = () => {
           console.log('Connected to collaborative WebSocket room:', roomName);
           announcePresence();
+          // Immediately request full state synchronization from any active peer
+          const syncReq = { type: 'SYNC_REQUEST', tabId };
+          try { ws.send(JSON.stringify(syncReq)); } catch {}
         };
 
         ws.onmessage = (event) => {
@@ -157,6 +164,61 @@ function App() {
           const { activeThemeId, themes } = useThemeStore.getState();
           if (activeThemeId) {
             const updated = themes.map(t => t.id === activeThemeId ? { ...t, formations: data.formations } : t);
+            useThemeStore.setState({ themes: updated });
+            try {
+              localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
+            } catch { /* */ }
+          }
+        }
+      }
+
+      if (data.type === 'SYNC_REQUEST') {
+        // Respond with our current full state to let the connecting client catch up!
+        const statePayload = {
+          type: 'SYNC_RESPONSE',
+          punts: useFormationStore.getState().punts,
+          scenes: useTimelineStore.getState().scenes,
+          formations: useFormationStore.getState().savedFormations,
+          tabId
+        };
+        try { channel.postMessage(statePayload); } catch {}
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify(statePayload)); } catch {}
+        }
+      }
+
+      if (data.type === 'SYNC_RESPONSE') {
+        // 1. Sync Punts
+        const puntsStr = JSON.stringify(data.punts);
+        if (puntsStr !== lastReceivedPunts && puntsStr !== JSON.stringify(useFormationStore.getState().punts)) {
+          lastReceivedPunts = puntsStr;
+          useFormationStore.setState({ punts: data.punts });
+        }
+
+        // 2. Sync Scenes
+        const scenesStr = JSON.stringify(data.scenes);
+        if (scenesStr !== lastReceivedScenes && scenesStr !== JSON.stringify(useTimelineStore.getState().scenes)) {
+          lastReceivedScenes = scenesStr;
+          useTimelineStore.setState({ 
+            scenes: data.scenes, 
+            activeSceneId: data.activeSceneId 
+          });
+        }
+
+        // 3. Sync Formations Library & Theme Store
+        const formStr = JSON.stringify(data.formations);
+        if (formStr !== lastReceivedFormations && formStr !== JSON.stringify(useFormationStore.getState().savedFormations)) {
+          lastReceivedFormations = formStr;
+          useFormationStore.setState({ savedFormations: data.formations });
+
+          // Persist to useThemeStore so the mobile view updates immediately
+          const { activeThemeId, themes } = useThemeStore.getState();
+          if (activeThemeId) {
+            const updated = themes.map(t => 
+              t.id === activeThemeId 
+                ? { ...t, currentPunts: data.punts, shapes: data.scenes, formations: data.formations } 
+                : t
+            );
             useThemeStore.setState({ themes: updated });
             try {
               localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
