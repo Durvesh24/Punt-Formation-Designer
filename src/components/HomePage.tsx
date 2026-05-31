@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useThemeStore } from '../store/useThemeStore';
-import type { Theme } from '../store/types';
+import type { Theme, PuntData, PuntColor } from '../store/types';
 import { deserializeShape } from '../utils/sharing';
 import { v4 as uuidv4 } from 'uuid';
 import { 
@@ -108,7 +108,7 @@ function ThemeCard({ theme, onOpen, onDelete }: {
         {/* Shape pills preview */}
         {(theme.formations ?? []).length > 0 && (
           <div className="flex items-center gap-1.5 flex-wrap">
-            {(theme.formations ?? []).slice(0, 6).map((s, i) => (
+            {(theme.formations ?? []).slice(0, 6).map((s) => (
               <span key={s.id}
                 className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400">
                 {s.name}
@@ -338,15 +338,15 @@ export function HomePage({ onOpenTheme }: HomePageProps) {
         } catch { /* */ }
 
         // Convert CompressedPunts back to full PuntData objects
-        const newPunts = decoded.punts.map((p: any) => ({
+        const newPunts: PuntData[] = decoded.punts.map((p: any) => ({
           id: uuidv4(),
-          number: p[0],
-          x: p[1],
-          y: p[2],
-          rotation: p[3],
-          color: 'off',
-          colorFront: p[4] || 'off',
-          colorBack: p[5] || 'off',
+          number: Number(p[0]),
+          x: Number(p[1]),
+          y: Number(p[2]),
+          rotation: Number(p[3]),
+          color: 'off' as PuntColor,
+          colorFront: (p[4] || 'off') as PuntColor,
+          colorBack: (p[5] || 'off') as PuntColor,
         }));
 
         // Load directly into the main theme "Punya Nagari" (or create it if it doesn't exist yet)
