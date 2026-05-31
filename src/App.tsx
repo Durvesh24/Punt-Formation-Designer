@@ -10,6 +10,7 @@ import { useTimelineStore } from './store/useTimelineStore';
 import { useThemeStore } from './store/useThemeStore';
 import { resolveCollisionsEdgeToEdge } from './utils/collision';
 import { v4 as uuidv4 } from 'uuid';
+import { connect as ittySockConnect } from 'itty-sockets';
 import type { PuntData, Theme } from './store/types';
 import {
   Undo2, Redo2, Palette, MousePointer, Hand,
@@ -70,8 +71,7 @@ function App() {
     let lastReceivedScenes = '';
     let lastReceivedFormations = '';
     
-    let ws: WebSocket | null = null;
-    let reconnectTimeout: any = null;
+    let ittySock: ReturnType<typeof ittySockConnect> | null = null;
     let isClosed = false;
 
     const announcePresence = () => {
@@ -81,54 +81,55 @@ function App() {
         channel.postMessage(msg);
       } catch { /* */ }
 
-      // 2. Broadcast globally over WebSocket
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      // 2. Broadcast globally over itty-sockets
+      if (ittySock) {
         try {
-          ws.send(JSON.stringify(msg));
+          ittySock.send(msg);
         } catch { /* */ }
       }
     };
 
-    // Connect to public WebSocket relay for cross-device synchronization
-    const connectWebSocket = () => {
+    // Connect to itty-sockets relay for cross-device synchronization
+    const connectItty = () => {
       if (isClosed) return;
+      useEditorStore.setState({ syncStatus: 'connecting' });
 
       try {
-        const roomName = `punt_designer_theme_${channelKey}`;
-        ws = new WebSocket(`wss://socketsbay.com/wss/v2/1/${roomName}/`);
-
-        ws.onopen = () => {
-          console.log('Connected to collaborative WebSocket room:', roomName);
+        const roomName = `punt-designer-${channelKey}`;
+        console.log('[SYNC] Connecting to itty-sockets channel:', roomName);
+        
+        ittySock = ittySockConnect(roomName);
+        
+        // itty-sockets fires 'open' when connected
+        ittySock.on('open', () => {
+          console.log('[SYNC] ✅ Connected to itty-sockets channel:', roomName);
+          useEditorStore.setState({ syncStatus: 'connected' });
           announcePresence();
           // Immediately request full state synchronization from any active peer
-          const syncReq = { type: 'SYNC_REQUEST', tabId };
-          try { ws.send(JSON.stringify(syncReq)); } catch {}
-        };
+          ittySock!.send({ type: 'SYNC_REQUEST', tabId });
+        });
 
-        ws.onmessage = (event) => {
+        // itty-sockets fires 'message' with { message } containing the parsed payload
+        ittySock.on('message', ({ message }: { message: any }) => {
           try {
-            const data = JSON.parse(event.data);
-            handleIncomingMessage(data);
+            handleIncomingMessage(message);
           } catch {
-            // Safe ignore corrupt/non-JSON public messages
+            // Safe ignore corrupt messages
           }
-        };
+        });
 
-        ws.onerror = (err) => {
-          console.warn('Collaborative WebSocket connection error:', err);
-        };
+        ittySock.on('close', () => {
+          console.log('[SYNC] itty-sockets channel closed');
+          useEditorStore.setState({ syncStatus: 'disconnected' });
+        });
 
-        ws.onclose = () => {
-          console.log('Collaborative WebSocket closed. Retrying connection in 4s...');
-          if (!isClosed) {
-            reconnectTimeout = setTimeout(connectWebSocket, 4000);
-          }
-        };
+        ittySock.on('error', () => {
+          console.warn('[SYNC] itty-sockets connection error');
+          useEditorStore.setState({ syncStatus: 'disconnected' });
+        });
       } catch (err) {
-        console.error('Failed to initialize collaborative WebSocket:', err);
-        if (!isClosed) {
-          reconnectTimeout = setTimeout(connectWebSocket, 4000);
-        }
+        console.error('[SYNC] Failed to initialize itty-sockets:', err);
+        useEditorStore.setState({ syncStatus: 'disconnected' });
       }
     };
 
@@ -146,6 +147,16 @@ function App() {
         if (puntsStr !== lastReceivedPunts && puntsStr !== JSON.stringify(useFormationStore.getState().punts)) {
           lastReceivedPunts = puntsStr;
           useFormationStore.setState({ punts: data.punts });
+
+          // Sync to active theme in useThemeStore so MobileThemeViewer updates instantly!
+          const { activeThemeId, themes } = useThemeStore.getState();
+          if (activeThemeId) {
+            const updated = themes.map(t => t.id === activeThemeId ? { ...t, currentPunts: data.punts } : t);
+            useThemeStore.setState({ themes: updated });
+            try {
+              localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
+            } catch { /* */ }
+          }
         }
       }
 
@@ -157,6 +168,16 @@ function App() {
             scenes: data.scenes, 
             activeSceneId: data.activeSceneId 
           });
+
+          // Sync to active theme in useThemeStore so MobileThemeViewer updates instantly!
+          const { activeThemeId, themes } = useThemeStore.getState();
+          if (activeThemeId) {
+            const updated = themes.map(t => t.id === activeThemeId ? { ...t, shapes: data.scenes } : t);
+            useThemeStore.setState({ themes: updated });
+            try {
+              localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
+            } catch { /* */ }
+          }
         }
       }
 
@@ -188,8 +209,8 @@ function App() {
           tabId
         };
         try { channel.postMessage(statePayload); } catch {}
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          try { ws.send(JSON.stringify(statePayload)); } catch {}
+        if (ittySock) {
+          try { ittySock.send(statePayload); } catch {}
         }
       }
 
@@ -211,25 +232,25 @@ function App() {
           });
         }
 
-        // 3. Sync Formations Library & Theme Store
+        // 3. Sync Formations Library
         const formStr = JSON.stringify(data.formations);
         if (formStr !== lastReceivedFormations && formStr !== JSON.stringify(useFormationStore.getState().savedFormations)) {
           lastReceivedFormations = formStr;
           useFormationStore.setState({ savedFormations: data.formations });
+        }
 
-          // Persist to useThemeStore so the mobile view updates immediately
-          const { activeThemeId, themes } = useThemeStore.getState();
-          if (activeThemeId) {
-            const updated = themes.map(t => 
-              t.id === activeThemeId 
-                ? { ...t, currentPunts: data.punts, shapes: data.scenes, formations: data.formations } 
-                : t
-            );
-            useThemeStore.setState({ themes: updated });
-            try {
-              localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
-            } catch { /* */ }
-          }
+        // Always sync all elements to active theme in useThemeStore on a sync response to guarantee complete consistency!
+        const { activeThemeId, themes } = useThemeStore.getState();
+        if (activeThemeId) {
+          const updated = themes.map(t => 
+            t.id === activeThemeId 
+              ? { ...t, currentPunts: data.punts, shapes: data.scenes, formations: data.formations } 
+              : t
+          );
+          useThemeStore.setState({ themes: updated });
+          try {
+            localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
+          } catch { /* */ }
         }
       }
     };
@@ -240,8 +261,8 @@ function App() {
 
     channel.addEventListener('message', handleBroadcastMessage);
     
-    // Connect WebSocket
-    connectWebSocket();
+    // Connect itty-sockets
+    connectItty();
 
     // Broadcast heartbeat every 2 seconds
     const heartbeatInterval = setInterval(announcePresence, 2000);
@@ -269,9 +290,9 @@ function App() {
         try {
           channel.postMessage(payload);
         } catch { /* */ }
-        if (ws && ws.readyState === WebSocket.OPEN) {
+        if (ittySock) {
           try {
-            ws.send(JSON.stringify(payload));
+            ittySock.send(payload);
           } catch { /* */ }
         }
       }
@@ -289,9 +310,9 @@ function App() {
         try {
           channel.postMessage(payload);
         } catch { /* */ }
-        if (ws && ws.readyState === WebSocket.OPEN) {
+        if (ittySock) {
           try {
-            ws.send(JSON.stringify(payload));
+            ittySock.send(payload);
           } catch { /* */ }
         }
       }
@@ -304,9 +325,9 @@ function App() {
         try {
           channel.postMessage(payload);
         } catch { /* */ }
-        if (ws && ws.readyState === WebSocket.OPEN) {
+        if (ittySock) {
           try {
-            ws.send(JSON.stringify(payload));
+            ittySock.send(payload);
           } catch { /* */ }
         }
       }
@@ -314,6 +335,7 @@ function App() {
 
     return () => {
       isClosed = true;
+      useEditorStore.setState({ syncStatus: 'disconnected' });
       clearInterval(heartbeatInterval);
       clearInterval(peerCleanup);
       channel.removeEventListener('message', handleBroadcastMessage);
@@ -323,13 +345,10 @@ function App() {
       try {
         channel.close();
       } catch { /* */ }
-      if (ws) {
+      if (ittySock) {
         try {
-          ws.close();
+          ittySock.close();
         } catch { /* */ }
-      }
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
       }
     };
   }, [activeThemeId, page]);

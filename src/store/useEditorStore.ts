@@ -9,6 +9,7 @@ interface EditorState {
   selectedIds: string[];
   tool: 'select' | 'hand';
   collisionWarning: string;
+  syncStatus: 'disconnected' | 'connecting' | 'connected';
   activeDragPunt: { id: string; x: number; y: number } | null;
   setTheme: (theme: 'dark' | 'light') => void;
   toggleLabels: () => void;
@@ -31,6 +32,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   selectedIds: [],
   tool: 'select',
   collisionWarning: '',
+  syncStatus: 'disconnected',
   activeDragPunt: null,
   setTheme: (theme) => set({ theme }),
   toggleLabels: () => set((state) => ({ showLabels: !state.showLabels })),

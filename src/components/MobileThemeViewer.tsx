@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { PuntData, PuntColor } from '../store/types';
 import { useThemeStore } from '../store/useThemeStore';
+import { useEditorStore } from '../store/useEditorStore';
 import { Stage, Layer, Rect, Circle, Text, Group, Path, Line } from 'react-konva';
 import { 
-  ChevronLeft, Laptop, Sun, Moon, Layers, 
-  ZoomIn, ZoomOut, Move, Home
+  ChevronLeft, Sun, Moon, Layers, 
+  ZoomIn, ZoomOut, Move, Home, Wifi, WifiOff, RefreshCw
 } from 'lucide-react';
 import { getPuntDimensions } from '../utils/sizes';
 
@@ -15,6 +16,7 @@ interface MobileThemeViewerProps {
 
 export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, onBack }) => {
   const { themes } = useThemeStore();
+  const syncStatus = useEditorStore((s) => s.syncStatus);
   const theme = themes.find(t => t.id === themeId) ?? null;
 
   const [activeThemeMode, setActiveThemeMode] = useState<'light' | 'dark'>('light');
@@ -55,7 +57,10 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
     );
   }
 
-  const formations = theme.formations ?? [];
+  // Use timeline shapes (scenes) as the primary list, falling back to formations library presets if timeline is empty
+  const formations = (theme.shapes && theme.shapes.length > 0)
+    ? theme.shapes
+    : (theme.formations ?? []);
   
   // Set default selected shape if not set
   if (!selectedShapeId && formations.length > 0) {
@@ -167,11 +172,33 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
         </button>
       </header>
 
-      {/* Advisory Ribbon */}
-      <div className="shrink-0 border-b border-indigo-950/30 bg-indigo-950/10 py-2.5 px-4 text-[10px] font-semibold text-indigo-300 leading-snug flex items-center gap-2">
-        <Laptop size={13} className="text-indigo-400 flex-shrink-0" />
-        <span>
-          📱 <strong>Viewer Mode</strong>: Tap shapes below to plot them. Use your finger to drag & pan. Open on PC to edit shapes!
+      {/* Sync Status Ribbon */}
+      <div className="shrink-0 border-b border-slate-800/50 bg-slate-900/50 py-1.5 px-4 text-[10px] font-semibold leading-snug flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {syncStatus === 'connected' ? (
+            <>
+              <span className="flex items-center gap-1.5 text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <Wifi size={10} />
+                Live Sync
+              </span>
+            </>
+          ) : syncStatus === 'connecting' ? (
+            <span className="flex items-center gap-1.5 text-amber-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <RefreshCw size={10} className="animate-spin" />
+              Connecting...
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-slate-500">
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+              <WifiOff size={10} />
+              Offline
+            </span>
+          )}
+        </div>
+        <span className="text-slate-500">
+          📱 Viewer · Open on PC to edit
         </span>
       </div>
 
@@ -357,9 +384,10 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
           <div className="flex-1 overflow-x-auto flex gap-3 pb-1.5 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
             {formations.map((form) => {
               const isSelected = form.id === selectedShapeId;
-              const date = new Date(form.createdAt).toLocaleDateString('en-GB', {
-                day: 'numeric', month: 'short'
-              });
+              const isLibraryItem = 'createdAt' in form;
+              const displayInfo = isLibraryItem
+                ? new Date((form as any).createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                : `${(form as any).duration || 2.0}s`;
 
               return (
                 <button
@@ -375,11 +403,11 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
                     <span className="text-xs font-black truncate max-w-full leading-tight">
                       {form.name}
                     </span>
-                    {form.createdBy && (
+                    {('createdBy' in form && (form as any).createdBy) && (
                       <span className={`text-[10px] font-black uppercase tracking-wider truncate max-w-full ${
                         isSelected ? 'text-indigo-300' : 'text-slate-500'
                       }`}>
-                        by {form.createdBy}
+                        by {(form as any).createdBy}
                       </span>
                     )}
                   </div>
@@ -391,7 +419,7 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
                       ⚓ {form.punts.length}
                     </span>
                     <span className="text-[10px] text-slate-500 font-semibold">
-                      {date}
+                      {displayInfo}
                     </span>
                   </div>
                 </button>
