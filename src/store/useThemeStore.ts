@@ -8,8 +8,19 @@ const DRAFT_KEY     = 'punt_designer_draft_punts'; // old workspace punts
 
 // ── persistence ────────────────────────────────────────────────────────────
 
+const BACKUP_KEY = 'punt_designer_themes_backup';
+
 const persist = (themes: Theme[]) => {
-  try { localStorage.setItem(THEMES_KEY, JSON.stringify(themes)); } catch { /* */ }
+  try {
+    localStorage.setItem(THEMES_KEY, JSON.stringify(themes));
+    
+    // Safety Backup: Only backup if the list is NOT empty and contains actual shapes or formations!
+    const shapesCount = themes.reduce((sum, t) => sum + (t.shapes?.length || 0), 0);
+    const formationsCount = themes.reduce((sum, t) => sum + (t.formations?.length || 0), 0);
+    if (themes.length > 0 && (themes.length > 1 || shapesCount > 0 || formationsCount > 0)) {
+      localStorage.setItem(BACKUP_KEY, JSON.stringify(themes));
+    }
+  } catch { /* */ }
 };
 
 // ── one-time migration & recovery: pull existing timeline → Punya Nagari theme ──
@@ -149,7 +160,26 @@ const migrateExistingShapes = (themes: Theme[]): Theme[] => {
 const loadThemes = (): Theme[] => {
   try {
     const raw = localStorage.getItem(THEMES_KEY);
-    const themes = raw ? (JSON.parse(raw) as Theme[]) : [];
+    let themes = raw ? (JSON.parse(raw) as Theme[]) : [];
+    
+    // Recovery check: if local database has been emptied (0 or 1 theme with no shapes or formations),
+    // check if we have a rich backup key to restore from!
+    const shapesCount = themes.reduce((sum, t) => sum + (t.shapes?.length || 0), 0);
+    const formationsCount = themes.reduce((sum, t) => sum + (t.formations?.length || 0), 0);
+    if (themes.length <= 1 && shapesCount === 0 && formationsCount === 0) {
+      const backupRaw = localStorage.getItem(BACKUP_KEY);
+      if (backupRaw) {
+        const backupThemes = JSON.parse(backupRaw) as Theme[];
+        const backupShapesCount = backupThemes.reduce((sum, t) => sum + (t.shapes?.length || 0), 0);
+        const backupFormationsCount = backupThemes.reduce((sum, t) => sum + (t.formations?.length || 0), 0);
+        if (backupThemes.length > themes.length || backupShapesCount > 0 || backupFormationsCount > 0) {
+          console.log('[RECOVERY] Restoring database from safety backup');
+          themes = backupThemes;
+          try { localStorage.setItem(THEMES_KEY, JSON.stringify(themes)); } catch {}
+        }
+      }
+    }
+    
     return migrateExistingShapes(themes);
   } catch {
     // If error loading, still attempt migrating if possible

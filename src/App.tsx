@@ -140,6 +140,23 @@ function App() {
       if (data.type === 'GLOBAL_THEMES_UPDATE') {
         const themesStr = JSON.stringify(data.themes);
         if (themesStr !== lastReceivedThemes && themesStr !== JSON.stringify(useThemeStore.getState().themes)) {
+          
+          // Safety Shield: If this is a PC/Editor client, protect local database from empty/default overwrites!
+          if (!isMobile) {
+            const localThemes = useThemeStore.getState().themes;
+            const localShapesCount = localThemes.reduce((sum, t) => sum + (t.shapes?.length || 0), 0);
+            const localFormationsCount = localThemes.reduce((sum, t) => sum + (t.formations?.length || 0), 0);
+            
+            const incomingShapesCount = data.themes.reduce((sum: number, t: any) => sum + (t.shapes?.length || 0), 0);
+            const incomingFormationsCount = data.themes.reduce((sum: number, t: any) => sum + (t.formations?.length || 0), 0);
+
+            // Block blank or smaller database overrides to prevent data loss
+            if (localThemes.length > data.themes.length || localShapesCount > incomingShapesCount || localFormationsCount > incomingFormationsCount) {
+              console.warn('[SYNC SHIELD] Ignored incoming themes list because it is smaller/emptier than local database');
+              return;
+            }
+          }
+
           lastReceivedThemes = themesStr;
 
           // 1. Sync theme store
@@ -202,10 +219,16 @@ function App() {
       }
     }, 1000);
 
-    // Subscribe to theme list changes (creation, rename, delete, auto-saves)
+    // Subscribe to theme list changes (ONLY on PC/Desktop editor!)
     const unsubscribeThemes = useThemeStore.subscribe((state) => {
+      // Safety Shield: Mobile devices are read-only and must NEVER broadcast their state!
+      if (isMobile) return;
+
       const themesStr = JSON.stringify(state.themes);
       if (themesStr !== lastReceivedThemes) {
+        // Safety Shield: Never broadcast an empty themes list
+        if (state.themes.length === 0) return;
+
         try {
           globalSock!.send({
             type: 'GLOBAL_THEMES_UPDATE',
