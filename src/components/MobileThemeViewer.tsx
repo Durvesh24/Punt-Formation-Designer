@@ -57,10 +57,7 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
     );
   }
 
-  // Use timeline shapes (scenes) as the primary list, falling back to formations library presets if timeline is empty
-  const formations = (theme.shapes && theme.shapes.length > 0)
-    ? theme.shapes
-    : (theme.formations ?? []);
+  const formations = theme.formations ?? [];
   
   // Set default selected shape if not set
   if (!selectedShapeId && formations.length > 0) {
@@ -384,10 +381,9 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
           <div className="flex-1 overflow-x-auto flex gap-3 pb-1.5 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
             {formations.map((form) => {
               const isSelected = form.id === selectedShapeId;
-              const isLibraryItem = 'createdAt' in form;
-              const displayInfo = isLibraryItem
-                ? new Date((form as any).createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                : `${(form as any).duration || 2.0}s`;
+              const date = new Date(form.createdAt).toLocaleDateString('en-GB', {
+                day: 'numeric', month: 'short'
+              });
 
               return (
                 <button
@@ -403,11 +399,11 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
                     <span className="text-xs font-black truncate max-w-full leading-tight">
                       {form.name}
                     </span>
-                    {('createdBy' in form && (form as any).createdBy) && (
+                    {form.createdBy && (
                       <span className={`text-[10px] font-black uppercase tracking-wider truncate max-w-full ${
                         isSelected ? 'text-indigo-300' : 'text-slate-500'
                       }`}>
-                        by {(form as any).createdBy}
+                        by {form.createdBy}
                       </span>
                     )}
                   </div>
@@ -419,7 +415,7 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
                       ⚓ {form.punts.length}
                     </span>
                     <span className="text-[10px] text-slate-500 font-semibold">
-                      {displayInfo}
+                      {date}
                     </span>
                   </div>
                 </button>
