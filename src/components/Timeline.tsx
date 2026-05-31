@@ -1,8 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useTimelineStore } from '../store/useTimelineStore';
 import { useFormationStore } from '../store/useFormationStore';
-import { useEditorStore } from '../store/useEditorStore';
-import { useThemeStore } from '../store/useThemeStore';
 import { Play, Pause, Plus, Trash2, Clock, Sparkles, Video, Loader2, Layers } from 'lucide-react';
 import type { Scene, PuntData } from '../store/types';
 import { getGlobalStage } from '../utils/stageRef';
@@ -36,7 +34,7 @@ function easeInOut(t: number) {
 export const Timeline: React.FC = () => {
   const punts = useFormationStore(state => state.punts);
   const setPunts = useFormationStore(state => state.setPunts);
-  const { theme } = useEditorStore();
+
 
   const {
     scenes,
@@ -56,11 +54,6 @@ export const Timeline: React.FC = () => {
   } = useTimelineStore();
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const isDark = theme === 'dark';
-
-  // Active theme name for display
-  const { activeThemeId, themes } = useThemeStore();
-  const activeTheme = themes.find(t => t.id === activeThemeId);
 
   const [isRecording, setIsRecording] = useState(false);
   const [recordingLabel, setRecordingLabel] = useState('');

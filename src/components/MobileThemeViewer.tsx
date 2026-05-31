@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { Theme, Formation, PuntData, PuntColor } from '../store/types';
+import type { PuntData, PuntColor } from '../store/types';
 import { useThemeStore } from '../store/useThemeStore';
 import { Stage, Layer, Rect, Circle, Text, Group, Path, Line } from 'react-konva';
 import { 
-  ChevronLeft, Laptop, Sun, Moon, Layers, Anchor, 
-  Clock, ZoomIn, ZoomOut, Move, Home
+  ChevronLeft, Laptop, Sun, Moon, Layers, 
+  ZoomIn, ZoomOut, Move, Home
 } from 'lucide-react';
 import { getPuntDimensions } from '../utils/sizes';
 

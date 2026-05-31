@@ -18,7 +18,7 @@ export const Sidebar: React.FC = () => {
   } = useFormationStore();
 
   const { 
-    theme, selectedIds, setSelectedIds, clearSelection,
+    selectedIds, setSelectedIds, clearSelection,
     showLabels, toggleLabels, 
     showOutlines, toggleOutlines, 
     showGrid, toggleGrid,

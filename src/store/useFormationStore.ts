@@ -316,7 +316,9 @@ export const useFormationStore = create<FormationState>((set, get) => {
         const copy: Formation = {
           id: uuidv4(),
           name: `${target.name} (Copy)`,
+          createdBy: target.createdBy,
           punts: JSON.parse(JSON.stringify(target.punts)),
+          scenes: JSON.parse(JSON.stringify(target.scenes ?? [])),
           createdAt: Date.now()
         };
         const updated = [...savedFormations, copy];

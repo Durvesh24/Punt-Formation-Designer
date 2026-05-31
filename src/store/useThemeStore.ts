@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import type { Theme, Scene, PuntData } from './types';
 import { v4 as uuidv4 } from 'uuid';
-import { getPresetCoordinates } from '../utils/presets';
 
 const THEMES_KEY    = 'punt_designer_themes';
 const TIMELINE_KEY  = 'punt_designer_timeline';   // old global timeline
