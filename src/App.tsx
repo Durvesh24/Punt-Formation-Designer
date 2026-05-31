@@ -58,6 +58,7 @@ function App() {
 
     let lastReceivedPunts = '';
     let lastReceivedScenes = '';
+    let lastReceivedFormations = '';
     
     let ws: WebSocket | null = null;
     let reconnectTimeout: any = null;
@@ -145,6 +146,24 @@ function App() {
           });
         }
       }
+
+      if (data.type === 'FORMATIONS_UPDATE') {
+        const formStr = JSON.stringify(data.formations);
+        if (formStr !== lastReceivedFormations && formStr !== JSON.stringify(useFormationStore.getState().savedFormations)) {
+          lastReceivedFormations = formStr;
+          useFormationStore.setState({ savedFormations: data.formations });
+
+          // Sync to active theme in useThemeStore so MobileThemeViewer updates instantly!
+          const { activeThemeId, themes } = useThemeStore.getState();
+          if (activeThemeId) {
+            const updated = themes.map(t => t.id === activeThemeId ? { ...t, formations: data.formations } : t);
+            useThemeStore.setState({ themes: updated });
+            try {
+              localStorage.setItem('punt_designer_themes', JSON.stringify(updated));
+            } catch { /* */ }
+          }
+        }
+      }
     };
 
     const handleBroadcastMessage = (e: MessageEvent) => {
@@ -210,6 +229,21 @@ function App() {
       }
     });
 
+    const unsubscribeFormations = useFormationStore.subscribe((state) => {
+      const formStr = JSON.stringify(state.savedFormations);
+      if (formStr !== lastReceivedFormations) {
+        const payload = { type: 'FORMATIONS_UPDATE', formations: state.savedFormations, tabId };
+        try {
+          channel.postMessage(payload);
+        } catch { /* */ }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify(payload));
+          } catch { /* */ }
+        }
+      }
+    });
+
     return () => {
       isClosed = true;
       clearInterval(heartbeatInterval);
@@ -217,6 +251,7 @@ function App() {
       channel.removeEventListener('message', handleBroadcastMessage);
       unsubscribePunts();
       unsubscribeTimeline();
+      unsubscribeFormations();
       try {
         channel.close();
       } catch { /* */ }

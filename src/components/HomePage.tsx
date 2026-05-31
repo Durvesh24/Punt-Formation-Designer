@@ -317,6 +317,10 @@ export function HomePage({ onOpenTheme }: HomePageProps) {
   const { themes, createTheme, deleteTheme } = useThemeStore();
   const [showDialog, setShowDialog] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(() => {
+    // Mobile check: never show onboarding on mobile screens (< 768px)
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      return false;
+    }
     try {
       return !localStorage.getItem('punt_designer_onboarding_completed');
     } catch {
@@ -413,10 +417,10 @@ export function HomePage({ onOpenTheme }: HomePageProps) {
         <div className="flex items-center gap-2 sm:gap-3">
           <button
             onClick={() => setShowOnboarding(true)}
-            className="flex items-center gap-2 px-3 sm:px-4 py-2.5 rounded-xl text-sm font-bold border border-slate-800
+            className="hidden sm:flex items-center gap-2 px-3 sm:px-4 py-2.5 rounded-xl text-sm font-bold border border-slate-800
                        hover:border-slate-700 bg-slate-900/50 text-slate-350 hover:text-white transition-all shadow-sm"
           >
-            <HelpCircle size={16} /> <span className="hidden sm:inline">How to Use</span>
+            <HelpCircle size={16} /> <span>How to Use</span>
           </button>
           <button
             onClick={() => setShowDialog(true)}
@@ -458,7 +462,7 @@ export function HomePage({ onOpenTheme }: HomePageProps) {
             <div className="flex gap-3">
               <button
                 onClick={() => setShowOnboarding(true)}
-                className="flex items-center gap-2 px-6 py-3 border border-slate-800 hover:border-slate-700
+                className="hidden sm:flex items-center gap-2 px-6 py-3 border border-slate-800 hover:border-slate-700
                            rounded-xl text-sm font-bold transition-all bg-slate-900 text-slate-300"
               >
                 <HelpCircle size={18} /> How to Use
