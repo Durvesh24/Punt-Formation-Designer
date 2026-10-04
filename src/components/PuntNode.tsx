@@ -292,22 +292,33 @@ export const PuntNode: React.FC<PuntNodeProps> = ({
         cornerRadius={6}
         listening={false}
       />
-      {showLabels && (
-        isAnchor ? (
+      {showLabels && (() => {
+        const isBackLit = (punt.colorBack ?? 'off') !== 'off';
+        const isFrontLit = (punt.colorFront ?? 'off') !== 'off';
+        const isNumberOnBack = isBackLit && !isFrontLit;
+
+        const numX = isNumberOnBack ? 0 : PUNT_WIDTH / 2;
+        const anchorX = isNumberOnBack ? (3 * PUNT_WIDTH) / 4 - 7 : PUNT_WIDTH / 4 - 7;
+
+        return isAnchor ? (
           <Group x={0} y={0} width={PUNT_WIDTH} height={PUNT_HEIGHT}>
-            {/* Anchor symbol — always visible in both modes */}
-            <Group x={PUNT_WIDTH / 2 - 18} y={PUNT_HEIGHT / 2 - 8} width={14} height={16}>
+            {/* Anchor symbol — always visible on opposite half in both modes */}
+            <Group x={anchorX} y={PUNT_HEIGHT / 2 - 8} width={14} height={16}>
               <Circle x={7} y={3} radius={2} stroke="#fbbf24" strokeWidth={1.8} />
               <Line points={[7, 5, 7, 13]} stroke="#fbbf24" strokeWidth={1.8} lineCap="round" />
               <Line points={[4, 8, 10, 8]} stroke="#fbbf24" strokeWidth={1.8} lineCap="round" />
               <Path data="M 1 8 A 6 6 0 0 0 13 8" stroke="#fbbf24" strokeWidth={1.8} fill="none" lineCap="round" />
             </Group>
-            {/* Digit label — only in light mode */}
+            {/* Digit label — on front / colored side in light mode */}
             {!isDark && (
               <Text
                 text="4"
-                x={PUNT_WIDTH / 2 + 4}
-                y={PUNT_HEIGHT / 2 - 7}
+                x={numX}
+                y={0}
+                width={PUNT_WIDTH / 2}
+                height={PUNT_HEIGHT}
+                align="center"
+                verticalAlign="middle"
                 fill="#ffffff"
                 fontSize={13}
                 fontStyle="bold"
@@ -315,11 +326,13 @@ export const PuntNode: React.FC<PuntNodeProps> = ({
             )}
           </Group>
         ) : (
-          /* Number label — only in light mode */
+          /* Number label — on front / colored side in light mode */
           !isDark && (
             <Text
               text={`${punt.number}`}
-              width={PUNT_WIDTH}
+              x={numX}
+              y={0}
+              width={PUNT_WIDTH / 2}
               height={PUNT_HEIGHT}
               align="center"
               verticalAlign="middle"
@@ -328,8 +341,8 @@ export const PuntNode: React.FC<PuntNodeProps> = ({
               fontStyle="bold"
             />
           )
-        )
-      )}
+        );
+      })()}
 
       {/* Dynamic 3 Direct Rotation Dots (stern, center, bow) */}
       {isSelected && (

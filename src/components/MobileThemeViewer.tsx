@@ -2,12 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { PuntData, PuntColor } from '../store/types';
 import { useThemeStore } from '../store/useThemeStore';
 import { useEditorStore } from '../store/useEditorStore';
+import { connect as ittySockConnect } from 'itty-sockets';
 import { Stage, Layer, Rect, Circle, Text, Group, Path, Line } from 'react-konva';
 import { 
   ChevronLeft, Sun, Moon, Layers, 
   ZoomIn, ZoomOut, Move, Home, Wifi, WifiOff, RefreshCw
 } from 'lucide-react';
 import { getPuntDimensions } from '../utils/sizes';
+import { v4 as uuidv4 } from 'uuid';
 
 interface MobileThemeViewerProps {
   themeId: string;
@@ -15,17 +17,21 @@ interface MobileThemeViewerProps {
 }
 
 export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, onBack }) => {
-  const { themes } = useThemeStore();
   const syncStatus = useEditorStore((s) => s.syncStatus);
-  const theme = themes.find(t => t.id === themeId) ?? null;
+  // Always read theme reactively from store so it updates when sync arrives
+  const theme = useThemeStore((s) => s.themes.find(t => t.id === themeId) ?? null);
 
   const [activeThemeMode, setActiveThemeMode] = useState<'light' | 'dark'>('light');
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
-  const [stageScale, setStageScale] = useState(0.6); // Scale down slightly to fit mobile screen
+  const [stageScale, setStageScale] = useState(0.6);
   const [stagePos, setStagePos] = useState({ x: window.innerWidth / 2, y: (window.innerHeight - 300) / 2 });
+  const [isSyncing, setIsSyncing] = useState(false);
   
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: window.innerWidth, height: window.innerHeight - 280 });
+  // Keep a ref to the socket so we can send manual sync requests
+  const sockRef = useRef<ReturnType<typeof ittySockConnect> | null>(null);
+  const tabIdRef = useRef(uuidv4());
 
   useEffect(() => {
     const handleResize = () => {
@@ -37,16 +43,36 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
       }
     };
     window.addEventListener('resize', handleResize);
-    // Initial size check
     setTimeout(handleResize, 100);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  // Connect to the global channel to listen for live updates sent by App.tsx's sync engine
+  // We only LISTEN here — App.tsx handles all the broadcasting logic
+  // This local connection lets us fire a manual refresh request
+  useEffect(() => {
+    const sock = ittySockConnect('punt-designer-global-sync');
+    sockRef.current = sock;
+    return () => {
+      try { sock.close(); } catch {}
+      sockRef.current = null;
+    };
+  }, []);
+
+  const handleManualSync = () => {
+    setIsSyncing(true);
+    try {
+      sockRef.current?.send({ type: 'GLOBAL_THEMES_REQUEST', tabId: tabIdRef.current });
+    } catch {}
+    setTimeout(() => setIsSyncing(false), 2000);
+  };
 
   if (!theme) {
     return (
       <div className="w-full h-full bg-slate-950 flex flex-col items-center justify-center p-6 text-center select-none font-sans">
         <Layers className="w-12 h-12 text-slate-700 mb-4" />
         <h2 className="text-lg font-black text-white mb-2">Theme not found</h2>
+        <p className="text-xs text-slate-500 mb-4">This theme may have been deleted on PC.</p>
         <button 
           onClick={onBack}
           className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-black text-white"
@@ -194,9 +220,19 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
             </span>
           )}
         </div>
-        <span className="text-slate-500">
-          📱 Viewer · Open on PC to edit
-        </span>
+        <button
+          onClick={handleManualSync}
+          disabled={isSyncing}
+          className={`flex items-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-bold transition-all active:scale-95 ${
+            isSyncing
+              ? 'border-indigo-700 bg-indigo-900/30 text-indigo-400'
+              : 'border-slate-700 bg-slate-900 text-slate-400 hover:text-white hover:border-slate-600'
+          }`}
+          title="Request fresh data from PC"
+        >
+          <RefreshCw size={9} className={isSyncing ? 'animate-spin' : ''} />
+          {isSyncing ? 'Syncing...' : 'Sync Now'}
+        </button>
       </div>
 
       {/* Interactive Water Canvas Area */}
@@ -302,37 +338,52 @@ export const MobileThemeViewer: React.FC<MobileThemeViewerProps> = ({ themeId, o
                       />
                     )}
 
-                    {/* Labeled numbers inside boat */}
-                    {isAnchor ? (
-                      <Group x={0} y={0} width={width} height={height}>
-                        {/* Anchor Icon */}
-                        <Group x={width / 2 - 18} y={height / 2 - 8} width={14} height={16}>
-                          <Circle x={7} y={3} radius={2} stroke="#fbbf24" strokeWidth={1.8} />
-                          <Line points={[7, 5, 7, 13]} stroke="#fbbf24" strokeWidth={1.8} lineCap="round" />
-                          <Line points={[4, 8, 10, 8]} stroke="#fbbf24" strokeWidth={1.8} lineCap="round" />
-                          <Path data="M 1 8 A 6 6 0 0 0 13 8" stroke="#fbbf24" strokeWidth={1.8} fill="none" lineCap="round" />
+                    {/* Labeled numbers inside boat — on front / colored side */}
+                    {(() => {
+                      const isBackLit = (p.colorBack || 'off') !== 'off';
+                      const isFrontLit = (p.colorFront || 'off') !== 'off';
+                      const isNumberOnBack = isBackLit && !isFrontLit;
+
+                      const numX = isNumberOnBack ? 0 : width / 2;
+                      const anchorX = isNumberOnBack ? (3 * width) / 4 - 7 : width / 4 - 7;
+
+                      return isAnchor ? (
+                        <Group x={0} y={0} width={width} height={height}>
+                          {/* Anchor Icon on opposite side */}
+                          <Group x={anchorX} y={height / 2 - 8} width={14} height={16}>
+                            <Circle x={7} y={3} radius={2} stroke="#fbbf24" strokeWidth={1.8} />
+                            <Line points={[7, 5, 7, 13]} stroke="#fbbf24" strokeWidth={1.8} lineCap="round" />
+                            <Line points={[4, 8, 10, 8]} stroke="#fbbf24" strokeWidth={1.8} lineCap="round" />
+                            <Path data="M 1 8 A 6 6 0 0 0 13 8" stroke="#fbbf24" strokeWidth={1.8} fill="none" lineCap="round" />
+                          </Group>
+                          <Text
+                            text="4"
+                            x={numX}
+                            y={0}
+                            width={width / 2}
+                            height={height}
+                            align="center"
+                            verticalAlign="middle"
+                            fill="#ffffff"
+                            fontSize={11}
+                            fontStyle="bold"
+                          />
                         </Group>
+                      ) : (
                         <Text
-                          text="4"
-                          x={width / 2 + 4}
-                          y={height / 2 - 7}
+                          text={`${p.number}`}
+                          x={numX}
+                          y={0}
+                          width={width / 2}
+                          height={height}
+                          align="center"
+                          verticalAlign="middle"
                           fill="#ffffff"
                           fontSize={11}
                           fontStyle="bold"
                         />
-                      </Group>
-                    ) : (
-                      <Text
-                        text={`${p.number}`}
-                        width={width}
-                        height={height}
-                        align="center"
-                        verticalAlign="middle"
-                        fill="#ffffff"
-                        fontSize={11}
-                        fontStyle="bold"
-                      />
-                    )}
+                      );
+                    })()}
                   </Group>
                 );
               })}

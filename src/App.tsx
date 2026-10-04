@@ -14,8 +14,9 @@ import { connect as ittySockConnect } from 'itty-sockets';
 import type { PuntData, Theme } from './store/types';
 import {
   Undo2, Redo2, Palette, MousePointer, Hand,
-  Sun, Moon, Sparkles, AlertCircle, Home
+  Sun, Moon, Sparkles, AlertCircle, Home, Download
 } from 'lucide-react';
+import { ExportShapeModal } from './components/ExportShapeModal';
 import type { PuntColor } from './store/types';
 
 function App() {
@@ -24,18 +25,23 @@ function App() {
     theme, setTheme, tool, setTool, selectedIds,
     collisionWarning, showCollisionWarning
   } = useEditorStore();
-  const { scenes } = useTimelineStore();
+  const { scenes, activeSceneId } = useTimelineStore();
   const { setActiveTheme, saveCurrentState, activeThemeId, themes } = useThemeStore();
 
   const [activeHalf, setActiveHalf] = useState<'both' | 'front' | 'back'>('both');
   const [page, setPage] = useState<'home' | 'editor'>('home');
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const lastThemeIdRef = useRef<string | null>(null);
 
   const [isMobile, setIsMobile] = useState(false);
+  // Use a ref so the WebSocket closure always reads the LATEST isMobile value
+  const isMobileRef = useRef(false);
 
   useEffect(() => {
     const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768);
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      isMobileRef.current = mobile;
     };
     checkMobile();
     window.addEventListener('resize', checkMobile);
@@ -127,74 +133,51 @@ function App() {
       }
 
       if (data.type === 'GLOBAL_THEMES_REQUEST') {
-        // Broadcast our current list of themes to let the new client sync instantly!
+        // Only PC clients respond to sync requests — mobile never has authoritative data
+        if (isMobileRef.current) return;
         try {
-          globalSock!.send({
-            type: 'GLOBAL_THEMES_UPDATE',
-            themes: useThemeStore.getState().themes,
-            tabId
-          });
+          const localThemes = useThemeStore.getState().themes;
+          // Only respond if we actually have data worth sharing
+          if (localThemes.length > 0) {
+            globalSock!.send({
+              type: 'GLOBAL_THEMES_UPDATE',
+              themes: localThemes,
+              tabId
+            });
+          }
         } catch {}
       }
 
       if (data.type === 'GLOBAL_THEMES_UPDATE') {
-        const themesStr = JSON.stringify(data.themes);
-        if (themesStr !== lastReceivedThemes && themesStr !== JSON.stringify(useThemeStore.getState().themes)) {
-          
-          // Safety Shield: If this is a PC/Editor client, protect local database from empty/default overwrites!
-          if (!isMobile) {
-            const localThemes = useThemeStore.getState().themes;
-            const localShapesCount = localThemes.reduce((sum, t) => sum + (t.shapes?.length || 0), 0);
-            const localFormationsCount = localThemes.reduce((sum, t) => sum + (t.formations?.length || 0), 0);
-            
-            const incomingShapesCount = data.themes.reduce((sum: number, t: any) => sum + (t.shapes?.length || 0), 0);
-            const incomingFormationsCount = data.themes.reduce((sum: number, t: any) => sum + (t.formations?.length || 0), 0);
+        const incomingThemes: any[] = data.themes;
+        if (!Array.isArray(incomingThemes) || incomingThemes.length === 0) return;
 
-            // Block blank or smaller database overrides to prevent data loss
-            if (localThemes.length > data.themes.length || localShapesCount > incomingShapesCount || localFormationsCount > incomingFormationsCount) {
-              console.warn('[SYNC SHIELD] Ignored incoming themes list because it is smaller/emptier than local database');
-              return;
-            }
-          }
+        const themesStr = JSON.stringify(incomingThemes);
+        if (themesStr === lastReceivedThemes) return; // No change, skip
+        if (themesStr === JSON.stringify(useThemeStore.getState().themes)) return; // Already in sync
 
-          lastReceivedThemes = themesStr;
+        // Safety Shield: If this is a PC/Editor client, protect local database from truncated overwrites!
+        if (!isMobileRef.current) {
+          const localThemes = useThemeStore.getState().themes;
+          const localFormationsCount = localThemes.reduce((sum, t) => sum + (t.formations?.length || 0), 0);
+          const incomingFormationsCount = incomingThemes.reduce((sum: number, t: any) => sum + (t.formations?.length || 0), 0);
 
-          // 1. Sync theme store
-          useThemeStore.setState({ themes: data.themes });
-          try {
-            localStorage.setItem('punt_designer_themes', JSON.stringify(data.themes));
-          } catch {}
-
-          // 2. If editing/viewing the active theme, sync active workspace stores!
-          const activeThemeId = useThemeStore.getState().activeThemeId;
-          const page = pageRef.current;
-          
-          if (activeThemeId && page === 'editor') {
-            const currentActiveTheme = data.themes.find((t: any) => t.id === activeThemeId);
-            if (currentActiveTheme) {
-              // Sync Punts
-              const puntsStr = JSON.stringify(currentActiveTheme.currentPunts);
-              if (puntsStr !== JSON.stringify(useFormationStore.getState().punts)) {
-                useFormationStore.setState({ punts: currentActiveTheme.currentPunts });
-              }
-
-              // Sync timeline scenes
-              const scenesStr = JSON.stringify(currentActiveTheme.shapes);
-              if (scenesStr !== JSON.stringify(useTimelineStore.getState().scenes)) {
-                useTimelineStore.setState({
-                  scenes: currentActiveTheme.shapes,
-                  activeSceneId: currentActiveTheme.shapes[0]?.id ?? null
-                });
-              }
-
-              // Sync Formations presets library
-              const formationsStr = JSON.stringify(currentActiveTheme.formations ?? []);
-              if (formationsStr !== JSON.stringify(useFormationStore.getState().savedFormations)) {
-                useFormationStore.setState({ savedFormations: currentActiveTheme.formations ?? [] });
-              }
-            }
+          // Block if incoming has fewer themes OR fewer total formations (shapes in library)
+          if (incomingThemes.length < localThemes.length || incomingFormationsCount < localFormationsCount) {
+            console.warn('[SYNC SHIELD] PC blocked incoming sync: incoming has less data than local database');
+            return;
           }
         }
+
+        lastReceivedThemes = themesStr;
+
+        // 1. Sync theme store and persist
+        useThemeStore.setState({ themes: incomingThemes });
+        try {
+          localStorage.setItem('punt_designer_themes', JSON.stringify(incomingThemes));
+        } catch {}
+
+        console.log('[GLOBAL SYNC] ✅ Themes synced from peer. Themes:', incomingThemes.length);
       }
     };
 
@@ -219,18 +202,36 @@ function App() {
       }
     }, 1000);
 
-    // Subscribe to theme list changes (ONLY on PC/Desktop editor!)
+    // PC periodically broadcasts its full state every 10s so mobile stays fresh
+    // even if the initial GLOBAL_THEMES_REQUEST/RESPONSE was missed
+    const periodicBroadcast = setInterval(() => {
+      if (isMobileRef.current) return; // Only PC broadcasts
+      const localThemes = useThemeStore.getState().themes;
+      if (localThemes.length === 0) return;
+      try {
+        const themesStr = JSON.stringify(localThemes);
+        globalSock?.send({
+          type: 'GLOBAL_THEMES_UPDATE',
+          themes: localThemes,
+          tabId
+        });
+        lastReceivedThemes = themesStr; // Update so we don't re-receive our own broadcast
+      } catch {}
+    }, 10000);
+
+    // Subscribe to theme list changes — ONLY PC broadcasts, NEVER mobile!
     const unsubscribeThemes = useThemeStore.subscribe((state) => {
-      // Safety Shield: Mobile devices are read-only and must NEVER broadcast their state!
-      if (isMobile) return;
+      // CRITICAL: Always read from ref, NOT from closed-over isMobile state
+      if (isMobileRef.current) return;
 
       const themesStr = JSON.stringify(state.themes);
       if (themesStr !== lastReceivedThemes) {
-        // Safety Shield: Never broadcast an empty themes list
+        // Safety: Never broadcast an empty themes list
         if (state.themes.length === 0) return;
 
+        lastReceivedThemes = themesStr;
         try {
-          globalSock!.send({
+          globalSock?.send({
             type: 'GLOBAL_THEMES_UPDATE',
             themes: state.themes,
             tabId
@@ -244,6 +245,7 @@ function App() {
       useEditorStore.setState({ syncStatus: 'disconnected' });
       clearInterval(heartbeatInterval);
       clearInterval(peerCleanup);
+      clearInterval(periodicBroadcast);
       unsubscribeThemes();
       if (globalSock) {
         try { globalSock.close(); } catch {}
@@ -619,7 +621,20 @@ function App() {
         </div>
 
         {/* Right Action Utilities */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          {/* Download Dual-Mode Shape Option */}
+          <button
+            onClick={() => setIsExportModalOpen(true)}
+            disabled={punts.length === 0}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:hover:bg-emerald-600 text-white font-bold text-xs shadow-md transition-all active:scale-95 border border-emerald-500/80 cursor-pointer disabled:cursor-not-allowed"
+            title="Download Shape (Light & Dark Mode adjusted in 1 file)"
+          >
+            <Download size={14} />
+            <span className="hidden sm:inline">Download Shape</span>
+          </button>
+
+          <div className="w-px h-5 bg-slate-800" />
+
           {/* Day/Night visual switcher */}
           <button
             onClick={() => setTheme(isDark ? 'light' : 'dark')}
@@ -656,6 +671,15 @@ function App() {
 
       {/* 3. BOTTOM SCENE SEQUENCE TIMELINE */}
       <Timeline />
+
+      {/* 4. DUAL-MODE SHAPE EXPORT MODAL */}
+      <ExportShapeModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        punts={punts}
+        themeName={activeTheme ? activeTheme.name : 'Punt Formation'}
+        shapeName={scenes.find(s => s.id === activeSceneId)?.name || 'Custom Shape'}
+      />
     </div>
   );
 }
